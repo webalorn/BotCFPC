@@ -1,9 +1,24 @@
-import discord
+import discord, aiohttp, time, json, asyncio
+
+before_contest = sorted([60*10, 60*60*2, 60*60*24])
+codeforces_notif_waiting_delay = 3*60
+config_file = 'config.json'
+channel_alerts_id = '450184920489263107'#'432540436582760473'
+config = {}
 
 client = discord.Client()
 
 chandata = None
 data = {}
+
+def save_config():
+    with open(config_file, 'w') as f:
+        json.dump(config, f)
+
+async def getJsonOf(*p, **pn):
+    async with aiohttp.get(*p, **pn) as r:
+        if r.status == 200:
+            return await r.json()
 
 @client.event
 async def on_ready():
@@ -89,8 +104,63 @@ async def on_message(message):
     if message.content.startswith("&link"):
         await cmdLinkUser(message)
 
+async def background_tasks_codeforces():
+    await client.wait_until_ready()
+    while not client.is_closed:
+        content = None
+        try:
+            content = await getJsonOf('http://codeforces.com/api/contest.list')
+        except Exception as e:
+            print('Codeforces API call error:', e)
+            continue
+
+        nextContests = [contest for contest in content['result'] if contest['phase'] == "BEFORE"]
+
+        channel = None
+
+
+        for server in client.servers:
+            for chan in server.channels:
+                if chan.id == channel_alerts_id:
+                    channel = chan
+        if chan:
+            channelCfg = config['contests']
+
+            notifyContests = []
+
+            for contest in nextContests:
+                contestId = str(contest['id'])
+                for delay in before_contest:
+                    if contest['relativeTimeSeconds'] >= -delay and (not contestId in channelCfg or channelCfg[contestId] > delay):
+                        channelCfg[contestId] = delay
+                        notifyContests.append(contest)
+
+            for contest in notifyContests:
+                seconds = -1*contest['relativeTimeSeconds']
+                duree = time.strftime(
+                    ('%-M minutes %-S seconds' if seconds < 60*60 else '%-Hh %-M min') if seconds < 60*60*24 else '%-d jours %-Hh %-M min',
+                    time.gmtime(seconds)
+                )
+                msg = '@everyone: {0} dans {1}'.format(contest['name'], duree)
+                if seconds < 60*60*24 and seconds > 5*60:
+                    msg += ' [register at: http://codeforces.com/contestRegistration/{0}]'.format(contest['id'])
+                await client.send_message(channel, msg)
+            save_config()
+        await asyncio.sleep(codeforces_notif_waiting_delay)
+
 token = ""
 with open("token", "r") as f:
     token = f.read()
 
+try:
+    with open(config_file) as f:
+        config = json.load(f)
+except:
+    config = {}
+finally:
+    for dict_key in ['contests']:
+        if not dict_key in config:
+            config[dict_key] = {}
+
+client.loop.create_task(background_tasks_codeforces())
 client.run(token)

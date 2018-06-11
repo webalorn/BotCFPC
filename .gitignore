@@ -109,3 +109,6 @@ tempCodeRunnerFile.py
 
 # Secret token
 token
+
+# Config file
+config.json
